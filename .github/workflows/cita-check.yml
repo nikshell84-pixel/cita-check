@@ -1,0 +1,75 @@
+name: cita-check
+
+on:
+  schedule:
+    # 06:00..17:59 UTC каждые 30 мин (с запасом для CET/CEST)
+    - cron: "*/30 6-17 * * *"
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: "Upload debug artifacts (0/1)"
+        required: false
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: cita-check
+      cancel-in-progress: true
+
+    # Контейнер с браузерами и системными deps уже внутри.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.57.0-noble
+      options: --ipc=host --init
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      DEBUG_ARTIFACTS: ${{ github.event.inputs.debug || '0' }}
+      # ВАЖНО: версия Python-пакета Playwright должна совпадать с версией контейнера
+      PLAYWRIGHT_PY_VERSION: "1.57.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ env.PLAYWRIGHT_PY_VERSION }}
+
+      - name: Install deps (python)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "playwright==${PLAYWRIGHT_PY_VERSION}" requests
+
+      - name: Run checker
+        env:
+          PROVINCIA_LABEL: ${{ secrets.PROVINCIA_LABEL }}
+          OFICINA_MATCH: ${{ secrets.OFICINA_MATCH }}
+          TRAMITE_MATCH: ${{ secrets.TRAMITE_MATCH }}
+          MIN_DATE: ${{ secrets.MIN_DATE }}
+
+          NIE: ${{ secrets.NIE }}
+          FULL_NAME: ${{ secrets.FULL_NAME }}
+          PHONE: ${{ secrets.PHONE }}
+          EMAIL: ${{ secrets.EMAIL }}
+
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python check.py
+
+      - name: Upload artifacts (debug)
+        if: always() && env.DEBUG_ARTIFACTS == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-artifacts
+          path: |
+            step_loaded.png
+            before_personal.png
+          if-no-files-found: ignore
+          retention-days: 3
